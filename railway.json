@@ -5,8 +5,8 @@
   },
   "deploy": {
     "startCommand": "python bot.py",
-    "healthcheckPath": "/",
+    "healthcheckPath": null,
     "restartPolicyType": "ON_FAILURE",
-    "restartPolicyMaxRetries": 10
+    "restartPolicyMaxRetries": 3
   }
 }
