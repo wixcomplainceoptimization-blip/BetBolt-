@@ -5,15 +5,16 @@ import logging
 import sys
 import os
 import traceback
+import threading
 from datetime import datetime
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 # Fix for Python 3.13 compatibility
 import telegram
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryHandler,
     MessageHandler,
     filters,
     ContextTypes
@@ -36,6 +37,28 @@ logger = logging.getLogger(__name__)
 
 # Initialize API handler
 odds_api = OddsAPI()
+
+# ==================== HEALTHCHECK SERVER ====================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == '/health' or self.path == '/':
+            self.send_response(200)
+            self.send_header('Content-type', 'text/plain')
+            self.end_headers()
+            self.wfile.write(b'OK')
+        else:
+            self.send_response(404)
+            self.end_headers()
+
+def run_healthcheck_server():
+    """Run a simple HTTP server for Railway healthchecks"""
+    try:
+        port = int(os.environ.get('PORT', 8080))
+        server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+        logger.info(f"🏥 Healthcheck server running on port {port}")
+        server.serve_forever()
+    except Exception as e:
+        logger.error(f"❌ Healthcheck server error: {e}")
 
 # ==================== ERROR HANDLER ====================
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,6 +293,10 @@ I didn't understand that. Try using:
 def main():
     """Start the bot with error handling"""
     try:
+        # Start healthcheck server in a separate thread
+        health_thread = threading.Thread(target=run_healthcheck_server, daemon=True)
+        health_thread.start()
+        
         # Print Python version for debugging
         logger.info(f"🐍 Python version: {sys.version}")
         logger.info(f"📦 Telegram version: {telegram.__version__}")
