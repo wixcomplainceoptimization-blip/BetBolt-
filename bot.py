@@ -3,8 +3,12 @@
 
 import logging
 import sys
+import os
 import traceback
 from datetime import datetime
+
+# Fix for Python 3.13 compatibility
+import telegram
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -19,13 +23,13 @@ from config import Config
 from odds_api import OddsAPI
 from utils import Utils
 
-# ==================== ENHANCED LOGGING ====================
+# ==================== LOGGING ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler('betbolt.log')  # Log to file too
+        logging.FileHandler('betbolt.log')
     ]
 )
 logger = logging.getLogger(__name__)
@@ -40,11 +44,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(traceback.format_exc())
     
     try:
-        # Try to send error message to user
         if update and update.effective_message:
             await update.effective_message.reply_text(
-                "❌ Sorry, something went wrong. The developers have been notified.\n"
-                "Please try again later or use /help for assistance."
+                "❌ Sorry, something went wrong. Please try again later."
             )
     except:
         pass
@@ -58,32 +60,20 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         welcome_message = f"""
 ⚡ *Welcome to BetBolt!* ⚡
 
-Hi {user.first_name}! I'm your AI betting assistant that provides smart predictions and real-time odds analysis.
-
-🔮 *What I can do:*
-• Get live odds from top bookmakers
-• Analyze match probabilities
-• Provide high-confidence predictions
-• Track multiple leagues
+Hi {user.first_name}! I'm your AI betting assistant.
 
 📋 *Available Commands:*
-/predict - Get top predictions for today
+/predict - Get top predictions
 /odds <league> - Get odds for specific league
 /leagues - Show supported leagues
 /help - Show this help message
 /about - About BetBolt
 
-🔍 *Quick Examples:*
-• `/predict` - Get best predictions
-• `/odds epl` - Get EPL odds
-• `/odds la liga` - Get La Liga odds
-
-⚠️ *Disclaimer:* Always bet responsibly! Predictions are for entertainment only.
+⚠️ *Disclaimer:* Always bet responsibly!
 """
         await update.message.reply_text(welcome_message, parse_mode='Markdown')
     except Exception as e:
         logger.error(f"Error in start_command: {e}")
-        await update.message.reply_text("❌ Error starting bot. Please try /help")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send help message"""
@@ -114,7 +104,6 @@ Type `/odds epl` to see Premier League odds
 Type `/predict` for top picks
 
 *Disclaimer:*
-BetBolt provides analysis and predictions for entertainment.
 Always gamble responsibly and within your limits.
 """
         await update.message.reply_text(help_text, parse_mode='Markdown')
@@ -129,7 +118,6 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 🤖 *Version:* 1.0.0
 📅 *Released:* 2026
-👨‍💻 *Developer:* BetBolt Team
 
 *Features:*
 • Real-time odds from multiple bookmakers
@@ -142,12 +130,7 @@ async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 *Responsible Gaming:*
 BetBolt is designed for entertainment purposes only.
-Please bet responsibly. Set limits and never chase losses.
-
-*Support:*
-For issues or suggestions, contact our support team.
-
-*Stay tuned for updates!* 🚀
+Please bet responsibly.
 """
         await update.message.reply_text(about_text, parse_mode='Markdown')
     except Exception as e:
@@ -171,28 +154,24 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await update.message.reply_text("🔍 *Analyzing matches... Please wait*", parse_mode='Markdown')
         
-        # Fetch odds for all sports
         matches = odds_api.get_odds()
         
         if not matches:
             await update.message.reply_text("❌ No matches found at the moment. Please try again later.")
             return
         
-        # Get predictions
         predictions = odds_api.get_predictions(matches)
         
         if not predictions:
             await update.message.reply_text("⚠️ No predictions available. Check back later!")
             return
         
-        # Format top predictions
         response = "⚡ *Top Predictions* ⚡\n\n"
         for i, pred in enumerate(predictions[:Config.MAX_PREDICTIONS_DISPLAY]):
             response += odds_api.format_prediction_message(pred, i)
             if i < Config.MAX_PREDICTIONS_DISPLAY - 1:
                 response += "\n" + "─" * 30 + "\n"
         
-        # Split long messages if needed (Telegram has 4096 char limit)
         if len(response) > 4000:
             parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
             for part in parts:
@@ -217,7 +196,6 @@ async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         league_query = ' '.join(context.args).lower()
         
-        # Find matching league
         league_key = None
         for key, name in Config.LEAGUE_NAMES.items():
             if league_query in key.lower() or league_query in name.lower():
@@ -233,14 +211,12 @@ async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         await update.message.reply_text(f"🔍 *Fetching odds for {Config.LEAGUE_NAMES[league_key]}...*", parse_mode='Markdown')
         
-        # Fetch odds
         matches = odds_api.get_odds()
         
         if not matches:
             await update.message.reply_text("❌ No matches found at the moment.")
             return
         
-        # Filter matches for specific league
         league_matches = [m for m in matches if league_key in m.get('sport_key', '')]
         
         if not league_matches:
@@ -249,14 +225,12 @@ async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             return
         
-        # Get predictions for filtered matches
         predictions = odds_api.get_predictions(league_matches)
         
         if not predictions:
             await update.message.reply_text("⚠️ No odds available for these matches.")
             return
         
-        # Format response
         response = f"⚡ *{Config.LEAGUE_NAMES[league_key]} - Odds & Predictions* ⚡\n\n"
         for i, pred in enumerate(predictions[:3]):
             response += odds_api.format_prediction_message(pred, i)
@@ -275,13 +249,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         text = update.message.text
         
-        # Check if it's a command-like message
         if Utils.is_valid_command(text):
             return
         
-        # Simple response for non-commands
         response = """
-🤖 *BetBolt Bot*\n\nI didn't understand that. Try using one of my commands:
+🤖 *BetBolt Bot*
+
+I didn't understand that. Try using:
 • /predict - Get predictions
 • /odds <league> - Get odds for a league
 • /leagues - Show supported leagues
@@ -296,6 +270,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     """Start the bot with error handling"""
     try:
+        # Print Python version for debugging
+        logger.info(f"🐍 Python version: {sys.version}")
+        logger.info(f"📦 Telegram version: {telegram.__version__}")
+        
         # Create application
         application = Application.builder().token(Config.BOT_TOKEN).build()
         
