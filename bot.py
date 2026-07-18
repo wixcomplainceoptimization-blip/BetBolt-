@@ -3,6 +3,7 @@
 
 import logging
 import sys
+import traceback
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
@@ -18,22 +19,43 @@ from config import Config
 from odds_api import OddsAPI
 from utils import Utils
 
-# Enable logging
+# ==================== ENHANCED LOGGING ====================
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
+    level=logging.INFO,
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+        logging.FileHandler('betbolt.log')  # Log to file too
+    ]
 )
 logger = logging.getLogger(__name__)
 
 # Initialize API handler
 odds_api = OddsAPI()
 
+# ==================== ERROR HANDLER ====================
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Log errors and send message to user"""
+    logger.error(f"Update {update} caused error {context.error}")
+    logger.error(traceback.format_exc())
+    
+    try:
+        # Try to send error message to user
+        if update and update.effective_message:
+            await update.effective_message.reply_text(
+                "❌ Sorry, something went wrong. The developers have been notified.\n"
+                "Please try again later or use /help for assistance."
+            )
+    except:
+        pass
+
 # ==================== COMMAND HANDLERS ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send a welcome message when /start is issued"""
-    user = update.effective_user
-    welcome_message = f"""
+    try:
+        user = update.effective_user
+        welcome_message = f"""
 ⚡ *Welcome to BetBolt!* ⚡
 
 Hi {user.first_name}! I'm your AI betting assistant that provides smart predictions and real-time odds analysis.
@@ -58,11 +80,15 @@ Hi {user.first_name}! I'm your AI betting assistant that provides smart predicti
 
 ⚠️ *Disclaimer:* Always bet responsibly! Predictions are for entertainment only.
 """
-    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+        await update.message.reply_text(welcome_message, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in start_command: {e}")
+        await update.message.reply_text("❌ Error starting bot. Please try /help")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send help message"""
-    help_text = """
+    try:
+        help_text = """
 ⚡ *BetBolt Help Center* ⚡
 
 *Commands:*
@@ -91,11 +117,14 @@ Type `/predict` for top picks
 BetBolt provides analysis and predictions for entertainment.
 Always gamble responsibly and within your limits.
 """
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+        await update.message.reply_text(help_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in help_command: {e}")
 
 async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Send about message"""
-    about_text = """
+    try:
+        about_text = """
 ⚡ *About BetBolt* ⚡
 
 🤖 *Version:* 1.0.0
@@ -120,23 +149,28 @@ For issues or suggestions, contact our support team.
 
 *Stay tuned for updates!* 🚀
 """
-    await update.message.reply_text(about_text, parse_mode='Markdown')
+        await update.message.reply_text(about_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in about_command: {e}")
 
 async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Show supported leagues"""
-    league_text = "⚽ *Supported Leagues*\n\n"
-    for key, name in Config.LEAGUE_NAMES.items():
-        league_text += f"• {name}\n"
-        league_text += f"  (use: `/odds {key.replace('_', ' ')}`)\n\n"
-    
-    league_text += "\n💡 *Tip:* Try `/odds premier` for EPL odds!"
-    await update.message.reply_text(league_text, parse_mode='Markdown')
+    try:
+        league_text = "⚽ *Supported Leagues*\n\n"
+        for key, name in Config.LEAGUE_NAMES.items():
+            league_text += f"• {name}\n"
+            league_text += f"  (use: `/odds {key.replace('_', ' ')}`)\n\n"
+        
+        league_text += "\n💡 *Tip:* Try `/odds premier` for EPL odds!"
+        await update.message.reply_text(league_text, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in leagues_command: {e}")
 
 async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get top predictions"""
-    await update.message.reply_text("🔍 *Analyzing matches... Please wait*", parse_mode='Markdown')
-    
     try:
+        await update.message.reply_text("🔍 *Analyzing matches... Please wait*", parse_mode='Markdown')
+        
         # Fetch odds for all sports
         matches = odds_api.get_odds()
         
@@ -158,40 +192,47 @@ async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if i < Config.MAX_PREDICTIONS_DISPLAY - 1:
                 response += "\n" + "─" * 30 + "\n"
         
-        await update.message.reply_text(response, parse_mode='Markdown')
+        # Split long messages if needed (Telegram has 4096 char limit)
+        if len(response) > 4000:
+            parts = [response[i:i+4000] for i in range(0, len(response), 4000)]
+            for part in parts:
+                await update.message.reply_text(part, parse_mode='Markdown')
+        else:
+            await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Error in predict command: {e}")
+        logger.error(f"Error in predict_command: {e}")
+        logger.error(traceback.format_exc())
         await update.message.reply_text("❌ An error occurred while fetching predictions. Please try again later.")
 
 async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Get odds for a specific league"""
-    if not context.args:
-        await update.message.reply_text(
-            "📝 *Usage:* `/odds <league>`\n\nExample: `/odds premier` or `/odds epl`\n\nUse `/leagues` to see all options.",
-            parse_mode='Markdown'
-        )
-        return
-    
-    league_query = ' '.join(context.args).lower()
-    
-    # Find matching league
-    league_key = None
-    for key, name in Config.LEAGUE_NAMES.items():
-        if league_query in key.lower() or league_query in name.lower():
-            league_key = key
-            break
-    
-    if not league_key:
-        await update.message.reply_text(
-            f"❌ League '{league_query}' not found.\n\nUse `/leagues` to see all supported leagues.",
-            parse_mode='Markdown'
-        )
-        return
-    
-    await update.message.reply_text(f"🔍 *Fetching odds for {Config.LEAGUE_NAMES[league_key]}...*", parse_mode='Markdown')
-    
     try:
+        if not context.args:
+            await update.message.reply_text(
+                "📝 *Usage:* `/odds <league>`\n\nExample: `/odds premier` or `/odds epl`\n\nUse `/leagues` to see all options.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        league_query = ' '.join(context.args).lower()
+        
+        # Find matching league
+        league_key = None
+        for key, name in Config.LEAGUE_NAMES.items():
+            if league_query in key.lower() or league_query in name.lower():
+                league_key = key
+                break
+        
+        if not league_key:
+            await update.message.reply_text(
+                f"❌ League '{league_query}' not found.\n\nUse `/leagues` to see all supported leagues.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        await update.message.reply_text(f"🔍 *Fetching odds for {Config.LEAGUE_NAMES[league_key]}...*", parse_mode='Markdown')
+        
         # Fetch odds
         matches = odds_api.get_odds()
         
@@ -217,7 +258,7 @@ async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         # Format response
         response = f"⚡ *{Config.LEAGUE_NAMES[league_key]} - Odds & Predictions* ⚡\n\n"
-        for i, pred in enumerate(predictions[:3]):  # Show top 3
+        for i, pred in enumerate(predictions[:3]):
             response += odds_api.format_prediction_message(pred, i)
             if i < len(predictions) - 1:
                 response += "\n" + "─" * 30 + "\n"
@@ -225,49 +266,61 @@ async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(response, parse_mode='Markdown')
         
     except Exception as e:
-        logger.error(f"Error in odds command: {e}")
+        logger.error(f"Error in odds_command: {e}")
+        logger.error(traceback.format_exc())
         await update.message.reply_text("❌ An error occurred. Please try again later.")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle non-command messages"""
-    text = update.message.text
-    
-    # Check if it's a command-like message
-    if Utils.is_valid_command(text):
-        # Already handled by command handlers
-        return
-    
-    # Simple response for non-commands
-    response = """
+    try:
+        text = update.message.text
+        
+        # Check if it's a command-like message
+        if Utils.is_valid_command(text):
+            return
+        
+        # Simple response for non-commands
+        response = """
 🤖 *BetBolt Bot*\n\nI didn't understand that. Try using one of my commands:
 • /predict - Get predictions
 • /odds <league> - Get odds for a league
 • /leagues - Show supported leagues
 • /help - Get help
 """
-    await update.message.reply_text(response, parse_mode='Markdown')
+        await update.message.reply_text(response, parse_mode='Markdown')
+    except Exception as e:
+        logger.error(f"Error in handle_message: {e}")
 
 # ==================== MAIN FUNCTION ====================
 
 def main():
-    """Start the bot"""
-    # Create application
-    application = Application.builder().token(Config.BOT_TOKEN).build()
-    
-    # Add command handlers
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("about", about_command))
-    application.add_handler(CommandHandler("leagues", leagues_command))
-    application.add_handler(CommandHandler("predict", predict_command))
-    application.add_handler(CommandHandler("odds", odds_command))
-    
-    # Handle messages
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Start the bot
-    logger.info("Starting BetBolt bot...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    """Start the bot with error handling"""
+    try:
+        # Create application
+        application = Application.builder().token(Config.BOT_TOKEN).build()
+        
+        # Add error handler
+        application.add_error_handler(error_handler)
+        
+        # Add command handlers
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("help", help_command))
+        application.add_handler(CommandHandler("about", about_command))
+        application.add_handler(CommandHandler("leagues", leagues_command))
+        application.add_handler(CommandHandler("predict", predict_command))
+        application.add_handler(CommandHandler("odds", odds_command))
+        
+        # Handle messages
+        application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Start the bot
+        logger.info("🚀 Starting BetBolt bot...")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+    except Exception as e:
+        logger.error(f"❌ Fatal error in main: {e}")
+        logger.error(traceback.format_exc())
+        sys.exit(1)
 
 if __name__ == '__main__':
     main()
