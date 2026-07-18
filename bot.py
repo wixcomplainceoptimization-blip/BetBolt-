@@ -1,0 +1,273 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import logging
+import sys
+from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes
+)
+
+from config import Config
+from odds_api import OddsAPI
+from utils import Utils
+
+# Enable logging
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# Initialize API handler
+odds_api = OddsAPI()
+
+# ==================== COMMAND HANDLERS ====================
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send a welcome message when /start is issued"""
+    user = update.effective_user
+    welcome_message = f"""
+⚡ *Welcome to BetBolt!* ⚡
+
+Hi {user.first_name}! I'm your AI betting assistant that provides smart predictions and real-time odds analysis.
+
+🔮 *What I can do:*
+• Get live odds from top bookmakers
+• Analyze match probabilities
+• Provide high-confidence predictions
+• Track multiple leagues
+
+📋 *Available Commands:*
+/predict - Get top predictions for today
+/odds <league> - Get odds for specific league
+/leagues - Show supported leagues
+/help - Show this help message
+/about - About BetBolt
+
+🔍 *Quick Examples:*
+• `/predict` - Get best predictions
+• `/odds epl` - Get EPL odds
+• `/odds la liga` - Get La Liga odds
+
+⚠️ *Disclaimer:* Always bet responsibly! Predictions are for entertainment only.
+"""
+    await update.message.reply_text(welcome_message, parse_mode='Markdown')
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send help message"""
+    help_text = """
+⚡ *BetBolt Help Center* ⚡
+
+*Commands:*
+/predict - Get top 5 predictions
+/odds <league> - Get odds for specific league
+/leagues - List all supported leagues
+/start - Welcome message
+/help - Show this help
+/about - About BetBolt
+
+*Supported Leagues:*
+• Premier League (EPL)
+• La Liga
+• Serie A
+• Bundesliga
+• Ligue 1
+• Eredivisie
+• Primeira Liga
+• Brasileirão
+
+*How to use:*
+Type `/odds epl` to see Premier League odds
+Type `/predict` for top picks
+
+*Disclaimer:*
+BetBolt provides analysis and predictions for entertainment.
+Always gamble responsibly and within your limits.
+"""
+    await update.message.reply_text(help_text, parse_mode='Markdown')
+
+async def about_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Send about message"""
+    about_text = """
+⚡ *About BetBolt* ⚡
+
+🤖 *Version:* 1.0.0
+📅 *Released:* 2026
+👨‍💻 *Developer:* BetBolt Team
+
+*Features:*
+• Real-time odds from multiple bookmakers
+• AI-powered probability analysis
+• Multiple league support
+• Confidence scoring system
+
+*Data Sources:*
+• The Odds API
+
+*Responsible Gaming:*
+BetBolt is designed for entertainment purposes only.
+Please bet responsibly. Set limits and never chase losses.
+
+*Support:*
+For issues or suggestions, contact our support team.
+
+*Stay tuned for updates!* 🚀
+"""
+    await update.message.reply_text(about_text, parse_mode='Markdown')
+
+async def leagues_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show supported leagues"""
+    league_text = "⚽ *Supported Leagues*\n\n"
+    for key, name in Config.LEAGUE_NAMES.items():
+        league_text += f"• {name}\n"
+        league_text += f"  (use: `/odds {key.replace('_', ' ')}`)\n\n"
+    
+    league_text += "\n💡 *Tip:* Try `/odds premier` for EPL odds!"
+    await update.message.reply_text(league_text, parse_mode='Markdown')
+
+async def predict_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get top predictions"""
+    await update.message.reply_text("🔍 *Analyzing matches... Please wait*", parse_mode='Markdown')
+    
+    try:
+        # Fetch odds for all sports
+        matches = odds_api.get_odds()
+        
+        if not matches:
+            await update.message.reply_text("❌ No matches found at the moment. Please try again later.")
+            return
+        
+        # Get predictions
+        predictions = odds_api.get_predictions(matches)
+        
+        if not predictions:
+            await update.message.reply_text("⚠️ No predictions available. Check back later!")
+            return
+        
+        # Format top predictions
+        response = "⚡ *Top Predictions* ⚡\n\n"
+        for i, pred in enumerate(predictions[:Config.MAX_PREDICTIONS_DISPLAY]):
+            response += odds_api.format_prediction_message(pred, i)
+            if i < Config.MAX_PREDICTIONS_DISPLAY - 1:
+                response += "\n" + "─" * 30 + "\n"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in predict command: {e}")
+        await update.message.reply_text("❌ An error occurred while fetching predictions. Please try again later.")
+
+async def odds_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Get odds for a specific league"""
+    if not context.args:
+        await update.message.reply_text(
+            "📝 *Usage:* `/odds <league>`\n\nExample: `/odds premier` or `/odds epl`\n\nUse `/leagues` to see all options.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    league_query = ' '.join(context.args).lower()
+    
+    # Find matching league
+    league_key = None
+    for key, name in Config.LEAGUE_NAMES.items():
+        if league_query in key.lower() or league_query in name.lower():
+            league_key = key
+            break
+    
+    if not league_key:
+        await update.message.reply_text(
+            f"❌ League '{league_query}' not found.\n\nUse `/leagues` to see all supported leagues.",
+            parse_mode='Markdown'
+        )
+        return
+    
+    await update.message.reply_text(f"🔍 *Fetching odds for {Config.LEAGUE_NAMES[league_key]}...*", parse_mode='Markdown')
+    
+    try:
+        # Fetch odds
+        matches = odds_api.get_odds()
+        
+        if not matches:
+            await update.message.reply_text("❌ No matches found at the moment.")
+            return
+        
+        # Filter matches for specific league
+        league_matches = [m for m in matches if league_key in m.get('sport_key', '')]
+        
+        if not league_matches:
+            await update.message.reply_text(
+                f"⚠️ No current matches found for {Config.LEAGUE_NAMES[league_key]}."
+            )
+            return
+        
+        # Get predictions for filtered matches
+        predictions = odds_api.get_predictions(league_matches)
+        
+        if not predictions:
+            await update.message.reply_text("⚠️ No odds available for these matches.")
+            return
+        
+        # Format response
+        response = f"⚡ *{Config.LEAGUE_NAMES[league_key]} - Odds & Predictions* ⚡\n\n"
+        for i, pred in enumerate(predictions[:3]):  # Show top 3
+            response += odds_api.format_prediction_message(pred, i)
+            if i < len(predictions) - 1:
+                response += "\n" + "─" * 30 + "\n"
+        
+        await update.message.reply_text(response, parse_mode='Markdown')
+        
+    except Exception as e:
+        logger.error(f"Error in odds command: {e}")
+        await update.message.reply_text("❌ An error occurred. Please try again later.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle non-command messages"""
+    text = update.message.text
+    
+    # Check if it's a command-like message
+    if Utils.is_valid_command(text):
+        # Already handled by command handlers
+        return
+    
+    # Simple response for non-commands
+    response = """
+🤖 *BetBolt Bot*\n\nI didn't understand that. Try using one of my commands:
+• /predict - Get predictions
+• /odds <league> - Get odds for a league
+• /leagues - Show supported leagues
+• /help - Get help
+"""
+    await update.message.reply_text(response, parse_mode='Markdown')
+
+# ==================== MAIN FUNCTION ====================
+
+def main():
+    """Start the bot"""
+    # Create application
+    application = Application.builder().token(Config.BOT_TOKEN).build()
+    
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("about", about_command))
+    application.add_handler(CommandHandler("leagues", leagues_command))
+    application.add_handler(CommandHandler("predict", predict_command))
+    application.add_handler(CommandHandler("odds", odds_command))
+    
+    # Handle messages
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    # Start the bot
+    logger.info("Starting BetBolt bot...")
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+
+if __name__ == '__main__':
+    main()
